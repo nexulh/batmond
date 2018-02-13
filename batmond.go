@@ -33,7 +33,12 @@ func init() {
 }
 
 func main() {
-	lfilepath := filepath.Join(os.Getenv("HOME"), ".batmond", ".lock")
+	lfiledir := filepath.Join(os.Getenv("HOME"), ".batmond")
+	if err := os.MkdirAll(lfiledir, os.ModePerm); err != nil {
+		fmt.Printf("Could not create app-directory: %s\n", err)
+	}
+
+	lfilepath := filepath.Join(lfiledir, ".lock")
 	lfile, err := lockfile.New(lfilepath)
 	if err != nil {
 		fmt.Printf("Could not initialize lockfile: %s\n", err)
