@@ -19,6 +19,9 @@ var (
 	verbose   bool
 	critLevel int
 	iconSize  int
+
+	running        bool
+	retryBatteries int
 )
 
 func init() {
@@ -66,7 +69,7 @@ func main() {
 
 	signal.Notify(intSig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 
-	running := true
+	running = true
 	for running {
 		select {
 		case <-intSig:
@@ -90,6 +93,13 @@ func (bm *BatteryMonitor) Update() {
 	if err != nil {
 		return
 	}
+	retryBatteries++
+
+	if len(batteries) < 1 && retryBatteries > 5 {
+		fmt.Println("Could not find any batteries, exiting")
+		running = false
+	}
+	retryBatteries = 0
 
 	for _, b := range batteries {
 		if bm.shouldReset(*b) {
