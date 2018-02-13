@@ -3,10 +3,15 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/0xAX/notificator"
 	"github.com/distatus/battery"
+	"github.com/nightlyone/lockfile"
 )
 
 var (
@@ -25,6 +30,20 @@ func init() {
 }
 
 func main() {
+	lfilepath := filepath.Join(os.Getenv("HOME"), ".batmond", ".lock")
+	lfile, err := lockfile.New(lfilepath)
+	if err != nil {
+		fmt.Printf("Could not initialize lockfile: %s\n", err)
+		return
+	}
+	if err := lfile.TryLock(); err != nil {
+		fmt.Printf("Could not aquire lockfile (%s): %s\n", lfilepath, err)
+		return
+	}
+	defer lfile.Unlock()
+
+	intSig := make(chan os.Signal)
+
 	if verbose == true {
 		fmt.Println("Battery Monitor running")
 	}
@@ -45,9 +64,16 @@ func main() {
 	}
 	bm.notifiers = append(bm.notifiers, nn)
 
-	for {
-		bm.Update()
-		time.Sleep(time.Second * 1)
+	signal.Notify(intSig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+
+	running := true
+	for running {
+		select {
+		case <-intSig:
+			running = false
+		case <-time.Tick(time.Second * 1):
+			bm.Update()
+		}
 	}
 }
 
