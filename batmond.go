@@ -148,7 +148,24 @@ func (bm *BatteryMonitor) shouldNotify(b battery.Battery) bool {
 
 func (bm *BatteryMonitor) Notify(b battery.Battery) {
 	percent := b.Current / b.Full * 100
-	msg := fmt.Sprintf("%s at %.1f%%", b.State, percent)
+	var minsLeft float64
+	var timeLeft string
+
+	if b.State == battery.Discharging {
+		minsLeft = (b.Current * 60) / b.ChargeRate
+	} else if b.State == battery.Charging {
+		minsLeft = ((b.Full - b.Current) * 60) / b.ChargeRate
+	}
+
+	if minsLeft > 60 {
+		timeLeft = fmt.Sprintf("%d hours, %d minutes", int(minsLeft/60), int(minsLeft)%60)
+	} else {
+		timeLeft = fmt.Sprintf("%d minutes", minsLeft/60)
+
+	}
+
+	msg := fmt.Sprintf("%s at %.1f%%\n%s left", b.State, percent, timeLeft)
+
 	for _, notifier := range bm.notifiers {
 		if b.State == battery.Discharging && percent < float64(critLevel) {
 			notifier.Critical(msg)
