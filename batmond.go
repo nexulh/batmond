@@ -110,22 +110,47 @@ func (bm *BatteryMonitor) Update() {
 		if bm.shouldReset(*b) {
 			bm.Reset(*b)
 			bm.Notify(*b)
-		}
-		if bm.shouldNotify(*b) {
+		} else if bm.shouldNotify(*b) {
 			bm.Notify(*b)
 		}
 	}
 }
 
-func (bm *BatteryMonitor) Reset(b battery.Battery) {
-	bm.lastBatteryState = &b
+func (bm *BatteryMonitor) shouldReset(b battery.Battery) bool {
+	if bm.lastBatteryState == nil {
+		fmt.Println("Will reset battery state: No previous state")
+		return true
+	}
+
+	return false
+}
+
+func (bm *BatteryMonitor) shouldNotify(b battery.Battery) bool {
+	if bm.lastBatteryState == nil {
+		return true
+	}
+
+	if bm.isNewState(b) {
+		return true
+	}
+
+	if time.Now().After(bm.lastNotification.Add(bm.notificationDelay)) {
+		newPercentage := b.Current / b.Full
+		oldPercentage := bm.lastBatteryState.Current / bm.lastBatteryState.Full
+
+		if b.State == battery.Discharging && newPercentage < oldPercentage*0.5 {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (bm *BatteryMonitor) Notify(b battery.Battery) {
 	percent := b.Current / b.Full * 100
 	msg := fmt.Sprintf("%s at %.1f%%", b.State, percent)
 	for _, notifier := range bm.notifiers {
-		if b.Current/b.Full*100 < float64(critLevel) {
+		if b.State == battery.Discharging && percent < float64(critLevel) {
 			notifier.Critical(msg)
 		} else {
 			notifier.Print(msg)
@@ -136,22 +161,8 @@ func (bm *BatteryMonitor) Notify(b battery.Battery) {
 	bm.lastNotification = time.Now()
 }
 
-func (bm *BatteryMonitor) shouldNotify(b battery.Battery) bool {
-	if bm.lastBatteryState == nil {
-		return true
-	}
-
-	notificationOK := time.Now().After(bm.lastNotification.Add(bm.notificationDelay))
-	newPercentage := b.Current / b.Full
-	oldPercentage := bm.lastBatteryState.Current / bm.lastBatteryState.Full
-
-	if notificationOK && b.State == battery.Discharging && newPercentage < oldPercentage*0.5 {
-		return true
-	} else if bm.isNewState(b) {
-		return true
-	}
-
-	return false
+func (bm *BatteryMonitor) Reset(b battery.Battery) {
+	bm.lastBatteryState = &b
 }
 
 func (bm *BatteryMonitor) isNewState(b battery.Battery) bool {
@@ -159,17 +170,6 @@ func (bm *BatteryMonitor) isNewState(b battery.Battery) bool {
 		return true
 	}
 	return b.State != bm.lastBatteryState.State
-}
-
-func (bm *BatteryMonitor) shouldReset(b battery.Battery) bool {
-	if bm.lastBatteryState == nil {
-		return true
-	}
-	if b.State == battery.Discharging && b.Current > (bm.lastBatteryState.Current+0.01) {
-		return true
-	}
-
-	return false
 }
 
 type Notifier interface {
