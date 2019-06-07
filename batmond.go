@@ -15,18 +15,21 @@ import (
 )
 
 var (
-	minDelay  int64
-	verbose   bool
-	critLevel int
-	iconSize  int
+	minDelay        int64
+	verbose         bool
+	critPercentage  int
+	critMinutesLeft int
+	iconSize        int
 
 	running        bool
 	retryBatteries int
 )
 
 func init() {
-	flag.IntVar(&critLevel, "critlevel", 15, "battery level (%) below which critical notifications should be shown")
-	flag.Int64Var(&minDelay, "delay", 30, "minimum delay (in seconds) between notifications")
+	flag.IntVar(&critPercentage, "critPercentage", 10, "critical notifications below this battery percentage")
+	flag.IntVar(&critMinutesLeft, "critMinutesLeft", 30, "critical notifications when less than X minutes left")
+	// flag.Int64Var(&minDelay, "delay", 30, "minimum delay (in seconds) between notifications")
+	flag.Int64Var(&minDelay, "delay", 60, "minimum delay (in seconds) between notifications")
 	flag.BoolVar(&verbose, "verbose", false, "verbose output")
 	flag.IntVar(&iconSize, "iconSize", 48, "icon size")
 	flag.Parse()
@@ -52,9 +55,7 @@ func main() {
 
 	intSig := make(chan os.Signal)
 
-	if verbose == true {
-		fmt.Println("Battery Monitor running")
-	}
+	vPrintf("main: Battery Monitor running\n")
 
 	bm := BatteryMonitor{
 		notificationDelay: time.Second * time.Duration(minDelay),
@@ -75,11 +76,12 @@ func main() {
 	signal.Notify(intSig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 
 	running = true
+	bm.Update()
 	for running {
 		select {
 		case <-intSig:
 			running = false
-		case <-time.Tick(time.Second * 1):
+		case <-time.Tick(time.Second * 5):
 			bm.Update()
 		}
 	}
@@ -101,24 +103,24 @@ func (bm *BatteryMonitor) Update() {
 	retryBatteries++
 
 	if len(batteries) < 1 && retryBatteries > 5 {
-		fmt.Println("Could not find any batteries, exiting")
+		fmt.Println("No batteries found, exiting")
 		running = false
 	}
 	retryBatteries = 0
 
 	for _, b := range batteries {
 		if bm.shouldReset(*b) {
-			bm.Reset(*b)
-			bm.Notify(*b)
+			bm.setBatteryState(*b)
+			bm.notify(*b)
 		} else if bm.shouldNotify(*b) {
-			bm.Notify(*b)
+			bm.notify(*b)
 		}
 	}
 }
 
 func (bm *BatteryMonitor) shouldReset(b battery.Battery) bool {
 	if bm.lastBatteryState == nil {
-		fmt.Println("Will reset battery state: No previous state")
+		vPrintf("BatteryMonitor.shouldReset: No previous state found => true\n")
 		return true
 	}
 
@@ -126,59 +128,90 @@ func (bm *BatteryMonitor) shouldReset(b battery.Battery) bool {
 }
 
 func (bm *BatteryMonitor) shouldNotify(b battery.Battery) bool {
+	currentPercentage := b.Current / b.Full
+	minsLeft := int((b.Current * 60) / b.ChargeRate)
+
+	// Ignore invalid charge numbers
+	if currentPercentage > 1.0 || currentPercentage < 0.0 {
+		vPrintf("BatteryMonitor.shouldNotify: invalid charge state => false\n")
+		return false
+	}
+
 	if bm.lastBatteryState == nil {
+		vPrintf("BatteryMonitor.shouldNotify: no previous state => true\n")
+		return true
+	}
+	oldPercentage := bm.lastBatteryState.Current / bm.lastBatteryState.Full
+
+	// New state? where state = Discharging/Charging and so on
+	if bm.isNewState(b) {
+		vPrintf("BatteryMonitor.shouldNotify: isNewState => true\n")
 		return true
 	}
 
-	if bm.isNewState(b) {
+	if b.State == battery.Charging {
+		vPrintf("BatteryMonitor.shouldNotify: is charging => false\n")
+		return false
+	}
+
+	if b.Current > bm.lastBatteryState.Current {
+		vPrintf("BatteryMonitor.shouldNotify: charge is higher than last => true\n")
 		return true
 	}
 
 	if time.Now().After(bm.lastNotification.Add(bm.notificationDelay)) {
-		newPercentage := b.Current / b.Full
-		oldPercentage := bm.lastBatteryState.Current / bm.lastBatteryState.Full
-
-		if b.State == battery.Discharging && newPercentage < oldPercentage*0.5 {
+		if b.State == battery.Discharging && currentPercentage < oldPercentage*0.5 {
+			vPrintf("BatteryMonitor.shouldNotify: \n")
 			return true
 		}
+		if currentPercentage < float64(critPercentage/100.0) {
+			vPrintf("BatteryMonitor.shouldNotify: less than %d%% left => true\n", critPercentage)
+			return true
+		}
+		if minsLeft < critMinutesLeft {
+			vPrintf("BatteryMonitor.shouldNotify: less than %d minutes left => true\n", critMinutesLeft)
+			return true
+		}
+
 	}
 
 	return false
 }
 
-func (bm *BatteryMonitor) Notify(b battery.Battery) {
-	percent := b.Current / b.Full * 100
-	var minsLeft float64
+func (bm *BatteryMonitor) notify(b battery.Battery) {
+	currentPercentage := b.Current / b.Full
+	var minsLeft int
 	var timeLeft string
 
 	if b.State == battery.Discharging {
-		minsLeft = (b.Current * 60) / b.ChargeRate
+		minsLeft = int((b.Current * 60) / b.ChargeRate)
 	} else if b.State == battery.Charging {
-		minsLeft = ((b.Full - b.Current) * 60) / b.ChargeRate
+		minsLeft = int(((b.Full - b.Current) * 60) / b.ChargeRate)
 	}
 
 	if minsLeft > 60 {
-		timeLeft = fmt.Sprintf("%d hours, %d minutes", int(minsLeft/60), int(minsLeft)%60)
+		timeLeft = fmt.Sprintf("%d hour(s), %d minute(s)", minsLeft/60, minsLeft%60)
 	} else {
-		timeLeft = fmt.Sprintf("%d minutes", minsLeft/60)
+		timeLeft = fmt.Sprintf("%d minute(s)", minsLeft)
 
 	}
 
-	msg := fmt.Sprintf("%s at %.1f%%\n%s left", b.State, percent, timeLeft)
+	msg := fmt.Sprintf("%s at %.0f%%\n%s left", b.State, (currentPercentage * 100), timeLeft)
 
 	for _, notifier := range bm.notifiers {
-		if b.State == battery.Discharging && percent < float64(critLevel) {
+		if b.State == battery.Discharging && (currentPercentage*100) < float64(critPercentage) {
 			notifier.Critical(msg)
 		} else {
 			notifier.Print(msg)
 		}
 	}
 
-	bm.Reset(b)
+	bm.setBatteryState(b)
 	bm.lastNotification = time.Now()
 }
 
-func (bm *BatteryMonitor) Reset(b battery.Battery) {
+func (bm *BatteryMonitor) setBatteryState(b battery.Battery) {
+	vPrintf("BatteryMonitor.setBatteryState: setting lastBatteryState\n")
 	bm.lastBatteryState = &b
 }
 
@@ -228,4 +261,11 @@ func (nf NotificationNotifier) Print(s string) {
 
 func (nf NotificationNotifier) Critical(s string) {
 	nf._print(s, true)
+}
+
+func vPrintf(format string, a ...interface{}) (n int, err error) {
+	if verbose {
+		return fmt.Printf(format, a...)
+	}
+	return 0, nil
 }
