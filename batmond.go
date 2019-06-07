@@ -199,7 +199,8 @@ func (bm *BatteryMonitor) notify(b battery.Battery) {
 	msg := fmt.Sprintf("%s at %.0f%%\n%s left", b.State, (currentPercentage * 100), timeLeft)
 
 	for _, notifier := range bm.notifiers {
-		if b.State == battery.Discharging && (currentPercentage*100) < float64(critPercentage) {
+		if b.State == battery.Discharging && ((currentPercentage*100) < float64(critPercentage) ||
+			(minsLeft < critMinutesLeft)) {
 			notifier.Critical(msg)
 		} else {
 			notifier.Print(msg)
@@ -211,7 +212,6 @@ func (bm *BatteryMonitor) notify(b battery.Battery) {
 }
 
 func (bm *BatteryMonitor) setBatteryState(b battery.Battery) {
-	vPrintf("BatteryMonitor.setBatteryState: setting lastBatteryState\n")
 	bm.lastBatteryState = &b
 }
 
