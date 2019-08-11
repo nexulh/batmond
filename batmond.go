@@ -26,10 +26,9 @@ var (
 )
 
 func init() {
-	flag.IntVar(&critPercentage, "critPercentage", 10, "critical notifications below this battery percentage")
-	flag.IntVar(&critMinutesLeft, "critMinutesLeft", 30, "critical notifications when less than X minutes left")
-	// flag.Int64Var(&minDelay, "delay", 30, "minimum delay (in seconds) between notifications")
-	flag.Int64Var(&minDelay, "delay", 60, "minimum delay (in seconds) between notifications")
+	flag.IntVar(&critPercentage, "critPercentage", 5, "critical notifications below this battery percentage")
+	flag.IntVar(&critMinutesLeft, "critMinutesLeft", 15, "critical notifications when less than X minutes left")
+	flag.Int64Var(&minDelay, "delay", 120, "minimum delay (in seconds) between notifications")
 	flag.BoolVar(&verbose, "verbose", false, "verbose output")
 	flag.IntVar(&iconSize, "iconSize", 48, "icon size")
 	flag.Parse()
