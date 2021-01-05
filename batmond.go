@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -20,9 +21,6 @@ var (
 	critPercentage  int
 	critMinutesLeft int
 	iconSize        int
-
-	running        bool
-	retryBatteries int
 )
 
 func init() {
@@ -56,25 +54,22 @@ func main() {
 
 	vPrintf("main: Battery Monitor running\n")
 
-	bm := BatteryMonitor{
-		notificationDelay: time.Second * time.Duration(minDelay),
-	}
-
-	if verbose == true {
-		tn := TextNotifier{}
-		bm.notifiers = append(bm.notifiers, tn)
-	}
-
 	nn := NotificationNotifier{
 		notifier: notificator.New(notificator.Options{
 			DefaultIcon: fmt.Sprintf(".batmond/battery_%d.jpg", iconSize),
-			AppName:     "Battery Monitor"}),
+			AppName:     "Battery Monitor",
+		}),
 	}
-	bm.notifiers = append(bm.notifiers, nn)
+
+	bm := BatteryMonitor{
+		notificationDelay: time.Second * time.Duration(minDelay),
+		notifier:          nn,
+	}
 
 	signal.Notify(intSig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 
-	running = true
+	running := true
+
 	bm.Update()
 	for running {
 		select {
@@ -91,21 +86,20 @@ type BatteryMonitor struct {
 	notificationDelay time.Duration
 	lastBatteryState  *battery.Battery
 
-	notifiers []Notifier
+	notifier Notifier
 }
 
-func (bm *BatteryMonitor) Update() {
+func (bm *BatteryMonitor) Update() bool {
 	batteries, err := battery.GetAll()
 	if err != nil {
-		return
-	}
-	retryBatteries++
 
-	if len(batteries) < 1 && retryBatteries > 5 {
-		fmt.Println("No batteries found, exiting")
-		running = false
+		//vPrintf("BatteryMonitor.Update: battery.GetAll: : %v\n", err)
 	}
-	retryBatteries = 0
+
+	if len(batteries) < 1 {
+		vPrintf("BatteryMonitor.Update: No batteries found\n")
+		return false
+	}
 
 	for _, b := range batteries {
 		if bm.shouldReset(*b) {
@@ -115,6 +109,7 @@ func (bm *BatteryMonitor) Update() {
 			bm.notify(*b)
 		}
 	}
+	return true
 }
 
 func (bm *BatteryMonitor) shouldReset(b battery.Battery) bool {
@@ -132,24 +127,21 @@ func (bm *BatteryMonitor) shouldNotify(b battery.Battery) bool {
 
 	// Ignore invalid charge numbers
 	if currentPercentage > 1.0 || currentPercentage < 0.0 {
-		vPrintf("BatteryMonitor.shouldNotify: invalid charge state => false\n")
 		return false
 	}
 
 	if bm.lastBatteryState == nil {
-		vPrintf("BatteryMonitor.shouldNotify: no previous state => true\n")
 		return true
 	}
 	oldPercentage := bm.lastBatteryState.Current / bm.lastBatteryState.Full
 
 	// New state? where state = Discharging/Charging and so on
 	if bm.isNewState(b) {
-		vPrintf("BatteryMonitor.shouldNotify: isNewState => true\n")
+		vPrintf("BatteryMonitor.shouldNotify: new state => true\n")
 		return true
 	}
 
-	if b.State == battery.Charging {
-		vPrintf("BatteryMonitor.shouldNotify: is charging => false\n")
+	if b.State != battery.Discharging {
 		return false
 	}
 
@@ -160,7 +152,7 @@ func (bm *BatteryMonitor) shouldNotify(b battery.Battery) bool {
 
 	if time.Now().After(bm.lastNotification.Add(bm.notificationDelay)) {
 		if b.State == battery.Discharging && currentPercentage < oldPercentage*0.5 {
-			vPrintf("BatteryMonitor.shouldNotify: \n")
+			vPrintf("BatteryMonitor.shouldNotify: half of previous notification charge => true\n")
 			return true
 		}
 		if currentPercentage < float64(critPercentage/100.0) {
@@ -197,13 +189,11 @@ func (bm *BatteryMonitor) notify(b battery.Battery) {
 
 	msg := fmt.Sprintf("%s at %.0f%%\n%s left", b.State, (currentPercentage * 100), timeLeft)
 
-	for _, notifier := range bm.notifiers {
-		if b.State == battery.Discharging && ((currentPercentage*100) < float64(critPercentage) ||
-			(minsLeft < critMinutesLeft)) {
-			notifier.Critical(msg)
-		} else {
-			notifier.Print(msg)
-		}
+	if b.State == battery.Discharging && ((currentPercentage*100) < float64(critPercentage) ||
+		(minsLeft < critMinutesLeft)) {
+		bm.notifier.Critical(msg)
+	} else {
+		bm.notifier.Print(msg)
 	}
 
 	bm.setBatteryState(b)
@@ -224,16 +214,6 @@ func (bm *BatteryMonitor) isNewState(b battery.Battery) bool {
 type Notifier interface {
 	Print(s string)
 	Critical(s string)
-}
-
-type TextNotifier struct{}
-
-func (tn TextNotifier) Print(s string) {
-	fmt.Printf("Battery: %s\n", s)
-}
-
-func (tn TextNotifier) Critical(s string) {
-	tn.Print(s)
 }
 
 type NotificationNotifier struct {
@@ -262,9 +242,9 @@ func (nf NotificationNotifier) Critical(s string) {
 	nf._print(s, true)
 }
 
-func vPrintf(format string, a ...interface{}) (n int, err error) {
+func vPrintf(format string, a ...interface{}) {
 	if verbose {
-		return fmt.Printf(format, a...)
+		log.Printf(format, a...)
+		//fmt.Printf(format, a...)
 	}
-	return 0, nil
 }
